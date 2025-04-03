@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>Netdrops Photo Sender</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        #status { margin-bottom: 10px; }
+        #messages { border: 1px solid #ccc; padding: 10px; height: 150px; overflow-y: scroll; margin-bottom: 10px; }
+        #userList { border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; }
+        .user-item { padding: 5px; cursor: pointer; border-bottom: 1px solid #eee; }
+        .user-item:hover { background-color: #f0f0f0; }
+        .request-box {
+            border: 1px solid #aaa;
+            padding: 10px;
+            margin: 10px 0;
+        }
+        .request-box button { margin-right: 10px; }
+    </style>
+</head>
+<body>
+<h1>Netdrops Photo Sender</h1>
+<p id="status">연결 대기중...</p>
+<div id="messages"></div>
+
+<h3>현재 접속자 목록</h3>
+<div id="userList">연결된 사용자가 없습니다.</div>
+
+<!-- 수신한 전송 요청이 있을 때 표시할 영역 -->
+<div id="requestContainer"></div>
+
+<!-- 파일 전송 UI: 처음엔 숨겨놓고, 상대방이 수락했을 때 표시 -->
+<input type="file" id="photoInput" accept="image/*" style="display: none;">
+<button id="sendButton" style="display: none;">사진 전송</button>
+
+<script>
+    let ws;
+    // 전송 요청을 보낸 후 상대방이 수락했을 때, 어떤 사용자에게 파일을 보낼지 저장
+    let targetForFileTransfer = null;
+    const statusEl = document.getElementById('status');
+    const messagesEl = document.getElementById('messages');
+    const userListEl = document.getElementById('userList');
+    const requestContainer = document.getElementById('requestContainer');
+    const photoInput = document.getElementById('photoInput');
+    const sendButton = document.getElementById('sendButton');
+
+    // 내 세션 정보 (서버에서 할당한 값)
+    let mySessionId = null;
+    let myNickname = null;
+
+    function appendMessage(msg) {
+        const p = document.createElement('p');
+        p.textContent = msg;
+        messagesEl.appendChild(p);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    // 수신 측: 전송 요청 UI 생성 함수
+    function createRequestUI(senderNickname, senderSessionId) {
+        const requestBox = document.createElement('div');
+        requestBox.className = 'request-box';
+        requestBox.textContent = `${senderNickname}님이 파일 전송 요청을 보냈습니다.`;
+
+        const acceptButton = document.createElement('button');
+        acceptButton.textContent = "수락";
+        acceptButton.onclick = function() {
+            const response = {
+                type: "response",
+                target: senderSessionId, // 전송 요청 보낸 사용자에게 응답
+                data: { accepted: true }
+            };
+            ws.send(JSON.stringify(response));
+            appendMessage("전송 요청을 수락하였습니다.");
+            requestContainer.removeChild(requestBox);
+        };
+
+        const declineButton = document.createElement('button');
+        declineButton.textContent = "거절";
+        declineButton.onclick = function() {
+            const response = {
+                type: "response",
+                target: senderSessionId,
+                data: { accepted: false }
+            };
+            ws.send(JSON.stringify(response));
+            appendMessage("전송 요청을 거절하였습니다.");
+            requestContainer.removeChild(requestBox);
+        };
+
+        requestBox.appendChild(acceptButton);
+        requestBox.appendChild(declineButton);
+        requestContainer.appendChild(requestBox);
+    }
+
+    // 서버에서 보내주는 사용자 목록(userList) 메시지를 처리하여 UI 갱신
+    function updateUserList(users) {
+        userListEl.innerHTML = ""; // 기존 목록 초기화
+        if (users.length === 0) {
+            userListEl.textContent = "연결된 사용자가 없습니다.";
+            return;
+        }
+        users.forEach(user => {
+            // 내 자신은 목록에서 제외
+            if(user.sessionId === mySessionId) return;
+            const div = document.createElement('div');
+            div.className = 'user-item';
+            div.textContent = user.nickname;
+            div.onclick = () => {
+                // 사용자를 클릭하면 해당 사용자에게 파일 전송 요청 전송
+                const requestMsg = {
+                    type: "request",
+                    target: user.sessionId,
+                    senderSessionId: mySessionId,
+                    senderNickname: myNickname
+                };
+                ws.send(JSON.stringify(requestMsg));
+                appendMessage(`${user.nickname}님에게 전송 요청을 보냈습니다.`);
+            };
+            userListEl.appendChild(div);
+        });
+    }
+
+    function connectWebSocket() {
+        ws = new WebSocket("ws://localhost:8080/ws");
+
+        ws.onopen = () => {
+            statusEl.textContent = "서버에 연결되었습니다.";
+            appendMessage("서버에 연결되었습니다.");
+        };
+
+        ws.onmessage = (event) => {
+            // 먼저 event.data의 타입을 확인합니다.
+            if (typeof event.data === 'string') {
+                console.log("서버로부터 문자열 메시지:", event.data);
+                try {
+                    const data = JSON.parse(event.data);
+                    if(data.type === "init") {
+                        // 서버가 내 세션 정보(세션 ID, 닉네임)를 전송했다고 가정
+                        mySessionId = data.sessionId;
+                        myNickname = data.nickname;
+                        appendMessage(`내 정보: ${myNickname} (${mySessionId})`);
+                    } else if (data.type === "userList") {
+                        // 서버가 현재 접속자 목록을 보냈을 때
+                        updateUserList(data.users);
+                    } else if (data.type === "request") {
+                        // 다른 사용자가 파일 전송 요청을 보냈을 때 수신 측 UI 표시
+                        let senderNickname = data.senderNickname || "알 수 없는 사용자";
+                        let senderSessionId = data.senderSessionId || "";
+                        createRequestUI(senderNickname, senderSessionId);
+                    } else if (data.type === "response") {
+                        // 내가 보낸 요청에 대한 상대방의 응답 처리
+                        if (data.data.accepted) {
+                            appendMessage("상대방이 전송 요청을 수락하였습니다. 사진을 전송해주세요.");
+                            // 파일 전송 UI 표시
+                            photoInput.style.display = "inline";
+                            sendButton.style.display = "inline";
+                            // targetForFileTransfer은 요청할 때 이미 설정한 대상
+                            targetForFileTransfer = data.target;
+                        } else {
+                            appendMessage("상대방이 전송 요청을 거절하였습니다.");
+                        }
+                    } else {
+                        appendMessage("서버 메시지: " + event.data);
+                    }
+                } catch (err) {
+                    appendMessage("서버: " + event.data);
+                }
+            } else {
+                // 문자열이 아니라면 바이너리 데이터 처리 (예: 파일 전송된 경우)
+                console.log("서버로부터 바이너리 메시지 수신");
+                let blob = event.data instanceof Blob ? event.data : new Blob([event.data]);
+                const url = URL.createObjectURL(blob);
+
+                // 다운로드를 위한 임시 링크(a 태그)를 생성하여 자동 다운로드 실행
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = url;
+                // 여기서 파일 이름을 지정할 수 있습니다. (메타데이터로 받은 파일명이 있다면 사용)
+                a.download = 'downloaded_image.jpg';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                appendMessage("이미지 파일이 다운로드되었습니다.");
+            }
+        };
+
+        ws.onerror = (error) => {
+            console.error("WebSocket 에러:", error);
+            appendMessage("WebSocket 에러 발생");
+        };
+
+        ws.onclose = () => {
+            statusEl.textContent = "연결이 종료되었습니다.";
+            appendMessage("연결이 종료되었습니다.");
+        };
+    }
+
+    connectWebSocket();
+
+    // 파일 전송 버튼 클릭 시: 선택한 파일을 ArrayBuffer로 읽어 바이너리 메시지로 전송
+    sendButton.addEventListener("click", () => {
+        const file = photoInput.files[0];
+        if (!file) {
+            alert("전송할 사진 파일을 선택해주세요.");
+            return;
+        }
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const arrayBuffer = e.target.result;
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(arrayBuffer);
+                appendMessage(`사진 전송됨: ${file.name}`);
+                // 파일 전송 후 UI 초기화
+                photoInput.value = "";
+                photoInput.style.display = "none";
+                sendButton.style.display = "none";
+            } else {
+                alert("WebSocket 연결이 열려있지 않습니다.");
+            }
+        };
+        reader.readAsArrayBuffer(file);
+    });
+</script>
+</body>
+</html>
