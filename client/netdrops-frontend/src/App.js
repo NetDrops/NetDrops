@@ -205,6 +205,9 @@ const App = () => {
             }));
 
             addSystemMessage(`파일 전송됨: ${file.name}`);
+
+            // 파일 간 딜레이: 수신 측 WebSocket 프레임 처리 대기
+            await new Promise(resolve => setTimeout(resolve, 200));
         }
 
         // 4. 모든 파일 전송 완료 → 서버 매핑 해제
