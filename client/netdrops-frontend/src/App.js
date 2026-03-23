@@ -174,21 +174,10 @@ const App = () => {
         if (!accepted) setSelectedUser(null);
     };
 
-    const handleSaveFile = (file) => {
-        const url = URL.createObjectURL(file.blob);
-        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
-        if (isIOS) {
-            window.open(url, "_blank");
-        } else {
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = file.name;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-        }
-        setTimeout(() => URL.revokeObjectURL(url), 10000);
-    };
+    // receivedFile에 blobUrl을 미리 생성해서 저장
+    const receivedFileUrl = receivedFile
+        ? URL.createObjectURL(receivedFile.blob)
+        : null;
 
     return (
         <div className="min-h-screen bg-transparent flex flex-col">
@@ -316,21 +305,25 @@ const App = () => {
             </div>
 
             {/* 수신된 파일 (하단 고정) */}
-            {receivedFile && (
+            {receivedFile && receivedFileUrl && (
                 <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-lg p-4 z-20">
                     <div className="max-w-xl mx-auto">
                         <div className="flex justify-between items-center">
                             <span className="text-sm truncate flex-1 mr-4">{receivedFile.name}</span>
                             <div className="flex gap-2">
-                                <button
-                                    className="px-3 py-1 bg-blue-500 text-white text-sm rounded hover:bg-blue-600"
-                                    onClick={() => handleSaveFile(receivedFile)}
+                                <a
+                                    href={receivedFileUrl}
+                                    download={receivedFile.name}
+                                    className="px-3 py-1 bg-blue-500 text-white text-sm rounded hover:bg-blue-600 inline-block"
                                 >
                                     저장하기
-                                </button>
+                                </a>
                                 <button
                                     className="px-3 py-1 text-gray-400 text-sm hover:text-gray-600"
-                                    onClick={() => setReceivedFile(null)}
+                                    onClick={() => {
+                                        URL.revokeObjectURL(receivedFileUrl);
+                                        setReceivedFile(null);
+                                    }}
                                 >
                                     닫기
                                 </button>
