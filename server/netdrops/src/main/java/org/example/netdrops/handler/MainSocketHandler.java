@@ -36,28 +36,25 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
                     session.sendMessage(message);
                 }
             } catch (Exception e) {
-                logger.error("Error sending message to session {}: {}", session.getId(), e.getMessage(), e);
+                logger.error("Error sending to {}: {}", session.getId(), e.getMessage(), e);
             }
         }
     }
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
-        String randomNickname = NicknameGenerator.generate();
-        UserSession userSession = new UserSession(session.getId(), randomNickname, session);
-        sessions.put(session.getId(), userSession);
-        logger.info("New connection: sessionId={}, nickname={}", session.getId(), randomNickname);
+        String nickname = NicknameGenerator.generate();
+        sessions.put(session.getId(), new UserSession(session.getId(), nickname, session));
+        logger.info("Connected: sessionId={}, nickname={}", session.getId(), nickname);
 
-        String initMsg;
         try {
-            initMsg = objectMapper.writeValueAsString(
-                    Map.of("type", "init", "sessionId", session.getId(), "nickname", randomNickname)
+            String initMsg = objectMapper.writeValueAsString(
+                    Map.of("type", "init", "sessionId", session.getId(), "nickname", nickname)
             );
+            sendSafe(session, new TextMessage(initMsg));
         } catch (Exception e) {
-            logger.error("Error creating init message for session {}: {}", session.getId(), e.getMessage(), e);
-            return;
+            logger.error("Error creating init message: {}", e.getMessage(), e);
         }
-        sendSafe(session, new TextMessage(initMsg));
 
         broadcastUserList();
     }
@@ -67,9 +64,9 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
             List<Map<String, String>> userList = sessions.values().stream()
                     .map(u -> Map.of("sessionId", u.getSessionId(), "nickname", u.getNickname()))
                     .collect(Collectors.toList());
-            String message = objectMapper.writeValueAsString(Map.of("type", "userList", "users", userList));
-            TextMessage textMessage = new TextMessage(message);
-            sessions.values().forEach(user -> sendSafe(user.getSession(), textMessage));
+            String json = objectMapper.writeValueAsString(Map.of("type", "userList", "users", userList));
+            TextMessage msg = new TextMessage(json);
+            sessions.values().forEach(user -> sendSafe(user.getSession(), msg));
         } catch (Exception e) {
             logger.error("Error broadcasting user list: {}", e.getMessage(), e);
         }
@@ -77,127 +74,88 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
 
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) {
-        String payload = message.getPayload();
-        logger.info("Received text from {}: {}", session.getId(), payload);
-
         try {
-            JsonNode jsonNode = objectMapper.readTree(payload);
+            JsonNode json = objectMapper.readTree(message.getPayload());
+            if (!json.has("type") || json.get("type").isNull()) return;
 
-            // type 필드 누락 방어
-            if (!jsonNode.has("type") || jsonNode.get("type").isNull()) {
-                sendSafe(session, new TextMessage("type 필드가 없습니다."));
-                return;
-            }
-
-            String type = jsonNode.get("type").asText();
+            String type = json.get("type").asText();
+            logger.info("Text from {}: type={}", session.getId(), type);
 
             switch (type) {
                 case "request": {
-                    String targetSessionId = jsonNode.get("target").asText();
-                    UserSession targetUser = sessions.get(targetSessionId);
-                    if (targetUser != null && targetUser.getSession().isOpen()) {
-                        sendSafe(targetUser.getSession(), message);
-                        logger.info("Forwarded request: {} -> {}", session.getId(), targetSessionId);
-                    } else {
-                        sendSafe(session, new TextMessage("대상 사용자가 존재하지 않거나 접속이 끊어졌습니다."));
+                    String targetId = json.get("target").asText();
+                    UserSession target = sessions.get(targetId);
+                    if (target != null && target.getSession().isOpen()) {
+                        sendSafe(target.getSession(), message);
                     }
                     break;
                 }
-
                 case "response": {
-                    boolean accepted = jsonNode.get("data").get("accepted").asBoolean();
-                    String originalSenderSessionId = jsonNode.get("target").asText();
-                    UserSession senderUser = sessions.get(originalSenderSessionId);
-                    if (senderUser != null && senderUser.getSession().isOpen()) {
-                        sendSafe(senderUser.getSession(), message);
-                        logger.info("Forwarded response: {} -> {}, accepted={}", session.getId(), originalSenderSessionId, accepted);
+                    boolean accepted = json.get("data").get("accepted").asBoolean();
+                    String senderId = json.get("target").asText();
+                    UserSession sender = sessions.get(senderId);
+                    if (sender != null && sender.getSession().isOpen()) {
+                        sendSafe(sender.getSession(), message);
                         if (accepted) {
-                            fileTransferMap.put(originalSenderSessionId, session.getId());
-                            logger.info("File transfer mapping: {} -> {}", originalSenderSessionId, session.getId());
+                            fileTransferMap.put(senderId, session.getId());
+                            logger.info("Transfer mapping: {} -> {}", senderId, session.getId());
                         }
-                    } else {
-                        sendSafe(session, new TextMessage("요청한 사용자가 접속 중이지 않습니다."));
                     }
                     break;
                 }
-
                 case "meta": {
-                    String metaTargetId = jsonNode.get("target").asText();
-                    UserSession metaTargetUser = sessions.get(metaTargetId);
-                    if (metaTargetUser != null && metaTargetUser.getSession().isOpen()) {
-                        sendSafe(metaTargetUser.getSession(), message);
-                        logger.info("Forwarded meta to {}", metaTargetId);
+                    String targetId = json.get("target").asText();
+                    UserSession target = sessions.get(targetId);
+                    if (target != null && target.getSession().isOpen()) {
+                        sendSafe(target.getSession(), message);
                     }
                     break;
                 }
-
                 case "complete": {
-                    String completeTargetId = jsonNode.has("target") ? jsonNode.get("target").asText() : null;
-                    if (completeTargetId != null) {
-                        UserSession completeTargetUser = sessions.get(completeTargetId);
-                        if (completeTargetUser != null && completeTargetUser.getSession().isOpen()) {
-                            sendSafe(completeTargetUser.getSession(), message);
+                    String targetId = json.has("target") ? json.get("target").asText() : null;
+                    if (targetId != null) {
+                        UserSession target = sessions.get(targetId);
+                        if (target != null && target.getSession().isOpen()) {
+                            sendSafe(target.getSession(), message);
                         }
                     }
-                    logger.info("File complete (mapping kept): sender={}", session.getId());
-                    break;
-                }
-
-                case "allComplete": {
                     fileTransferMap.remove(session.getId());
-                    logger.info("All files complete: removed mapping for sender={}", session.getId());
-                    String allCompleteTargetId = jsonNode.has("target") ? jsonNode.get("target").asText() : null;
-                    if (allCompleteTargetId != null) {
-                        UserSession allCompleteTargetUser = sessions.get(allCompleteTargetId);
-                        if (allCompleteTargetUser != null && allCompleteTargetUser.getSession().isOpen()) {
-                            sendSafe(allCompleteTargetUser.getSession(), message);
-                        }
-                    }
+                    logger.info("Transfer complete, mapping removed: sender={}", session.getId());
                     break;
                 }
-
                 default:
-                    sendSafe(session, new TextMessage("알 수 없는 메시지 타입입니다."));
-                    logger.warn("Unknown message type from {}: {}", session.getId(), type);
+                    logger.warn("Unknown type from {}: {}", session.getId(), type);
             }
         } catch (Exception e) {
-            logger.error("Error handling text message from {}: {}", session.getId(), e.getMessage(), e);
-            sendSafe(session, new TextMessage("메시지 처리 중 오류가 발생하였습니다."));
+            logger.error("Error handling text from {}: {}", session.getId(), e.getMessage(), e);
         }
     }
 
     @Override
-    protected void handleBinaryMessage(WebSocketSession session, BinaryMessage message) throws Exception {
-        String senderSessionId = session.getId();
+    protected void handleBinaryMessage(WebSocketSession session, BinaryMessage message) {
+        String senderId = session.getId();
 
-        // 파일 크기 검증
         if (message.getPayloadLength() > MAX_BINARY_SIZE) {
             sendSafe(session, new TextMessage("파일 크기가 100MB를 초과하였습니다."));
-            logger.warn("Binary message too large from {}: {} bytes", senderSessionId, message.getPayloadLength());
             return;
         }
 
-        String targetSessionId = fileTransferMap.get(senderSessionId);
-        logger.info("Binary message: sender={}, target={}", senderSessionId, targetSessionId);
+        String targetId = fileTransferMap.get(senderId);
+        logger.info("Binary: sender={}, target={}, size={}", senderId, targetId, message.getPayloadLength());
 
-        if (targetSessionId != null) {
-            UserSession targetUser = sessions.get(targetSessionId);
-            if (targetUser != null && targetUser.getSession().isOpen()) {
-                sendSafe(targetUser.getSession(), message);
+        if (targetId != null) {
+            UserSession target = sessions.get(targetId);
+            if (target != null && target.getSession().isOpen()) {
+                sendSafe(target.getSession(), message);
             } else {
-                sendSafe(session, new TextMessage("파일 전송 대상 사용자가 접속 중이지 않습니다."));
-                fileTransferMap.remove(senderSessionId);
-                logger.warn("Target session {} not available, mapping removed.", targetSessionId);
+                fileTransferMap.remove(senderId);
             }
-        } else {
-            sendSafe(session, new TextMessage("파일 전송 세션이 설정되어 있지 않습니다."));
-            logger.warn("No file transfer mapping for sender {}", senderSessionId);
         }
     }
 
     @Override
-    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
-        logger.info("Connection closed: sessionId={}, status={}", session.getId(), status);
+    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
+        logger.info("Disconnected: sessionId={}, status={}", session.getId(), status);
         sessions.remove(session.getId());
         fileTransferMap.remove(session.getId());
         sessionLocks.remove(session.getId());

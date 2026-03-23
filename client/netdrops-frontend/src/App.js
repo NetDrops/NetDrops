@@ -1,49 +1,30 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Github, HelpCircle } from "lucide-react";
 
-const MAX_CONCURRENT_FILES = 30;
 const BLOCKED_EXTENSIONS = ['exe','bat','cmd','sh','ps1','msi','dmg','apk','vbs','jar','com','scr'];
-
-const generateUUID = () =>
-    "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-        const r = (Math.random() * 16) | 0;
-        const v = c === "x" ? r : ((r & 0x3) | 0x8);
-        return v.toString(16);
-    });
 
 const App = () => {
     const [currentUser, setCurrentUser] = useState(null);
     const [users, setUsers] = useState([]);
     const [searchTerm, setSearchTerm] = useState("");
     const [showTransferModal, setShowTransferModal] = useState(false);
-    const [showWifiAlert, setShowWifiAlert] = useState(false);
-    const [selectedFiles, setSelectedFiles] = useState([]);
+    const [selectedFile, setSelectedFile] = useState(null);
     const [selectedUser, setSelectedUser] = useState(null);
     const [showContextMenu, setShowContextMenu] = useState(null);
     const [showProfileModal, setShowProfileModal] = useState(false);
     const [modal, setModal] = useState({ visible: false, message: "" });
     const [showFileSelectModal, setShowFileSelectModal] = useState(false);
     const [showInfoModal, setShowInfoModal] = useState(false);
-    const [receivedFiles, setReceivedFiles] = useState([]); // 수신 완료된 파일 목록
-    const [isSending, setIsSending] = useState(false);      // 전송 중 여부
+    const [receivedFile, setReceivedFile] = useState(null);
+    const [isSending, setIsSending] = useState(false);
 
     const fileInputRef = useRef(null);
     const ws = useRef(null);
-    const pendingFileMeta = useRef({});
+    const pendingMeta = useRef(null);
 
     const filteredUsers = users.filter((user) =>
         user.nickname.toLowerCase().includes(searchTerm.toLowerCase())
     );
-
-    const addSystemMessage = (message) => {
-        console.log("[System Message]:", message);
-    };
-
-    const closeWifiAlert = () => {
-        setShowWifiAlert(false);
-        setSelectedFiles([]);
-        setSelectedUser(null);
-    };
 
     const handleUserClick = (user) => {
         setSelectedUser(user);
@@ -61,7 +42,6 @@ const App = () => {
     };
 
     useEffect(() => {
-        // wss:// / ws:// 자동 선택 + 포트 하드코딩 제거
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
         const wsUrl = process.env.REACT_APP_WS_URL ||
             `${protocol}//${window.location.host}/ws`;
@@ -70,7 +50,7 @@ const App = () => {
         ws.current.binaryType = "arraybuffer";
 
         ws.current.onopen = () => {
-            addSystemMessage("서버에 연결되었습니다.");
+            console.log("서버에 연결되었습니다.");
             setModal({ visible: false, message: "" });
         };
 
@@ -81,7 +61,6 @@ const App = () => {
                     switch (data.type) {
                         case "init":
                             setCurrentUser({
-                                id: data.sessionId,
                                 nickname: data.nickname,
                                 sessionId: data.sessionId,
                                 isOnline: true,
@@ -92,7 +71,6 @@ const App = () => {
                             break;
                         case "request":
                             setSelectedUser({
-                                id: data.senderSessionId,
                                 nickname: data.senderNickname,
                                 sessionId: data.senderSessionId,
                             });
@@ -101,135 +79,85 @@ const App = () => {
                         case "response":
                             setModal({ visible: false, message: "" });
                             if (data.data.accepted) {
-                                addSystemMessage("전송 요청이 수락되었습니다.");
                                 setShowFileSelectModal(true);
                             } else {
-                                addSystemMessage("전송 요청이 거절되었습니다.");
                                 setSelectedUser(null);
                             }
                             break;
                         case "meta":
-                            // 다음 binary와 매핑할 파일 정보 저장
-                            pendingFileMeta.current[data.fileId] = {
+                            pendingMeta.current = {
                                 fileName: data.fileName,
                                 fileType: data.fileType,
                             };
                             break;
                         case "complete":
-                            addSystemMessage("파일 수신이 완료되었습니다.");
-                            break;
-                        case "allComplete":
-                            addSystemMessage("모든 파일 수신이 완료되었습니다.");
+                            console.log("파일 수신 완료");
                             break;
                         default:
-                            addSystemMessage("서버 메시지: " + event.data);
+                            break;
                     }
                 } catch (err) {
-                    addSystemMessage("파싱 오류: " + event.data);
+                    console.error("파싱 오류:", err);
                 }
             } else {
-                // 바이너리 수신: UUID prefix(36바이트)로 fileId 추출 후 수신 목록에 추가
                 const buffer = event.data;
-                const headerBytes = new Uint8Array(buffer, 0, 36);
-                const fileId = new TextDecoder().decode(headerBytes);
-                const fileData = buffer.slice(36);
-
-                const meta = pendingFileMeta.current[fileId];
+                const meta = pendingMeta.current;
                 const fileName = meta?.fileName || "Netdrops_download";
                 const fileType = meta?.fileType || "application/octet-stream";
-                if (meta) delete pendingFileMeta.current[fileId];
+                pendingMeta.current = null;
 
-                const blob = new Blob([fileData], { type: fileType });
-
-                // 자동 다운로드(a.click()) 제거 → 수신 목록에 추가하여 사용자가 직접 저장 (iOS 대응)
-                setReceivedFiles((prev) => [...prev, { name: fileName, blob }]);
-                addSystemMessage(`파일 수신 완료: ${fileName}`);
+                const blob = new Blob([buffer], { type: fileType });
+                setReceivedFile({ name: fileName, blob });
             }
         };
 
-        ws.current.onerror = () => {
-            addSystemMessage("WebSocket 에러 발생");
-        };
-
-        ws.current.onclose = () => {
-            addSystemMessage("연결이 종료되었습니다.");
-        };
+        ws.current.onerror = () => console.error("WebSocket 에러 발생");
+        ws.current.onclose = () => console.log("연결이 종료되었습니다.");
 
         return () => {
-            ws.current && ws.current.close();
+            if (ws.current) ws.current.close();
         };
     }, []);
 
-    // 파일을 한 개씩 순차 전송 (meta → binary → complete 순서 보장)
-    const handleSendFiles = async () => {
-        if (!selectedFiles.length || !selectedUser || !ws.current) return;
+    const handleSendFile = async () => {
+        if (!selectedFile || !selectedUser || !ws.current) return;
 
-        // 블랙리스트 검증
-        for (const file of selectedFiles) {
-            const ext = file.name.split('.').pop().toLowerCase();
-            if (BLOCKED_EXTENSIONS.includes(ext)) {
-                alert(`${file.name}: 실행 파일은 전송할 수 없습니다.`);
-                return;
-            }
+        const ext = selectedFile.name.split('.').pop().toLowerCase();
+        if (BLOCKED_EXTENSIONS.includes(ext)) {
+            alert(`${selectedFile.name}: 실행 파일은 전송할 수 없습니다.`);
+            return;
         }
 
         const targetSessionId = selectedUser.sessionId;
         setIsSending(true);
-        setShowFileSelectModal(false);
 
-        for (const file of selectedFiles) {
-            const fileId = generateUUID();
-
-            // 1. meta 전송
-            ws.current.send(JSON.stringify({
-                type: "meta",
-                fileId,
-                fileName: file.name,
-                fileType: file.type || "application/octet-stream",
-                target: targetSessionId,
-            }));
-
-            // 2. binary 전송: await로 읽기 완료 후 즉시 전송 → meta 이후 순서 보장
-            const arrayBuffer = await file.arrayBuffer();
-            const header = new TextEncoder().encode(fileId);
-            const payload = new Uint8Array(header.length + arrayBuffer.byteLength);
-            payload.set(header, 0);
-            payload.set(new Uint8Array(arrayBuffer), header.length);
-            ws.current.send(payload.buffer);
-
-            // 3. 파일 단위 complete
-            ws.current.send(JSON.stringify({
-                type: "complete",
-                target: targetSessionId,
-                fileId,
-            }));
-
-            addSystemMessage(`파일 전송됨: ${file.name}`);
-
-            // 파일 간 딜레이: 수신 측 WebSocket 프레임 처리 대기
-            await new Promise(resolve => setTimeout(resolve, 200));
-        }
-
-        // 4. 모든 파일 전송 완료 → 서버 매핑 해제
+        // 1. meta
         ws.current.send(JSON.stringify({
-            type: "allComplete",
+            type: "meta",
+            fileName: selectedFile.name,
+            fileType: selectedFile.type || "application/octet-stream",
+            target: targetSessionId,
+        }));
+
+        // 2. binary
+        const arrayBuffer = await selectedFile.arrayBuffer();
+        ws.current.send(arrayBuffer);
+
+        // 3. complete
+        ws.current.send(JSON.stringify({
+            type: "complete",
             target: targetSessionId,
         }));
 
         setIsSending(false);
-        setSelectedFiles([]);
+        setSelectedFile(null);
         setSelectedUser(null);
     };
 
     const handleFileSelect = (e) => {
-        const files = e.target.files;
-        if (!files) return;
-        const filesArray = Array.from(files);
-        if (filesArray.length > MAX_CONCURRENT_FILES) {
-            alert("최대 30개까지 선택 가능합니다.");
-            return;
-        }
-        setSelectedFiles(filesArray);
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setSelectedFile(file);
         setShowFileSelectModal(false);
     };
 
@@ -239,24 +167,27 @@ const App = () => {
                 type: "response",
                 data: { accepted },
                 target: selectedUser.sessionId,
-                from: currentUser.sessionId, // 수락자 sessionId 포함
+                from: currentUser.sessionId,
             }));
         }
         setShowTransferModal(false);
         if (!accepted) setSelectedUser(null);
     };
 
-    const clearSearch = () => setSearchTerm("");
-
     const handleSaveFile = (file) => {
         const url = URL.createObjectURL(file.blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = file.name;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+        if (isIOS) {
+            window.open(url, "_blank");
+        } else {
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = file.name;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
     };
 
     return (
@@ -298,7 +229,7 @@ const App = () => {
                         <h2 className="text-xl font-semibold mb-4">Netdrops 소개</h2>
                         <p className="text-gray-700 mb-4">
                             Netdrops는 같은 네트워크 상의 사용자끼리 빠르고 간편하게
-                            파일을 공유할 수 있는 WebSocket 기반 P2P 파일 전송 서비스입니다.
+                            파일을 공유할 수 있는 WebSocket 기반 파일 전송 서비스입니다.
                         </p>
                         <button
                             onClick={() => setShowInfoModal(false)}
@@ -350,7 +281,7 @@ const App = () => {
                         {searchTerm && (
                             <button
                                 className="absolute inset-y-0 right-0 pr-3 flex items-center cursor-pointer"
-                                onClick={clearSearch}
+                                onClick={() => setSearchTerm("")}
                             >
                                 <i className="fas fa-times text-gray-400"></i>
                             </button>
@@ -384,42 +315,36 @@ const App = () => {
                 </div>
             </div>
 
-            {/* 수신된 파일 목록 (하단 고정) - 사용자가 직접 탭하여 저장 (iOS 대응) */}
-            {receivedFiles.length > 0 && (
+            {/* 수신된 파일 (하단 고정) */}
+            {receivedFile && (
                 <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-lg p-4 z-20">
                     <div className="max-w-xl mx-auto">
-                        <div className="flex justify-between items-center mb-2">
-                            <h4 className="font-semibold text-sm">수신된 파일 ({receivedFiles.length})</h4>
-                            <button
-                                className="text-xs text-gray-400 hover:text-gray-600"
-                                onClick={() => setReceivedFiles([])}
-                            >
-                                모두 지우기
-                            </button>
-                        </div>
-                        <div className="flex flex-col gap-2 max-h-40 overflow-y-auto">
-                            {receivedFiles.map((file, i) => (
-                                <div key={i} className="flex justify-between items-center bg-gray-50 rounded px-3 py-2">
-                                    <span className="text-sm truncate flex-1 mr-4">{file.name}</span>
-                                    <button
-                                        className="flex-shrink-0 px-3 py-1 bg-blue-500 text-white text-sm rounded hover:bg-blue-600"
-                                        onClick={() => handleSaveFile(file)}
-                                    >
-                                        저장하기
-                                    </button>
-                                </div>
-                            ))}
+                        <div className="flex justify-between items-center">
+                            <span className="text-sm truncate flex-1 mr-4">{receivedFile.name}</span>
+                            <div className="flex gap-2">
+                                <button
+                                    className="px-3 py-1 bg-blue-500 text-white text-sm rounded hover:bg-blue-600"
+                                    onClick={() => handleSaveFile(receivedFile)}
+                                >
+                                    저장하기
+                                </button>
+                                <button
+                                    className="px-3 py-1 text-gray-400 text-sm hover:text-gray-600"
+                                    onClick={() => setReceivedFile(null)}
+                                >
+                                    닫기
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
             )}
 
-            {/* 숨김 파일 입력 */}
+            {/* 숨김 파일 입력 (단일 파일) */}
             <input
                 type="file"
                 ref={fileInputRef}
                 className="hidden"
-                multiple
                 onChange={handleFileSelect}
             />
 
@@ -454,33 +379,17 @@ const App = () => {
             )}
 
             {/* 파일 전송 확인 모달 */}
-            {selectedFiles.length > 0 && selectedUser && (
+            {selectedFile && selectedUser && (
                 <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-30">
-                    <div className="bg-white rounded-lg p-6 max-w-xl w-full mx-4">
+                    <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
                         <h3 className="text-lg font-semibold mb-4">
                             {selectedUser.nickname}에게 전송
                         </h3>
-                        <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 mb-4">
-                            <div className="text-sm mb-2 text-gray-500">
-                                {selectedFiles.length}개 파일 선택됨 (최대 30개)
-                            </div>
-                            <div className="flex overflow-x-auto pb-2 gap-2">
-                                {selectedFiles.map((file, index) => (
-                                    <div key={index} className="flex-shrink-0 w-16 h-16 bg-gray-100 rounded overflow-hidden">
-                                        {file.type.startsWith("image/") ? (
-                                            <img
-                                                src={URL.createObjectURL(file)}
-                                                alt={file.name}
-                                                className="w-full h-full object-cover"
-                                            />
-                                        ) : (
-                                            <div className="w-full h-full flex items-center justify-center text-xs text-gray-600 font-bold p-1 text-center">
-                                                {file.name.split('.').pop().toUpperCase()}
-                                            </div>
-                                        )}
-                                    </div>
-                                ))}
-                            </div>
+                        <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 mb-4 text-center">
+                            <p className="text-sm text-gray-700">{selectedFile.name}</p>
+                            <p className="text-xs text-gray-400 mt-1">
+                                {(selectedFile.size / 1024).toFixed(1)} KB
+                            </p>
                         </div>
                         {isSending && (
                             <p className="text-sm text-blue-500 mb-3 text-center">전송 중...</p>
@@ -488,7 +397,7 @@ const App = () => {
                         <div className="flex justify-end gap-3">
                             <button
                                 onClick={() => {
-                                    setSelectedFiles([]);
+                                    setSelectedFile(null);
                                     setSelectedUser(null);
                                 }}
                                 disabled={isSending}
@@ -497,7 +406,7 @@ const App = () => {
                                 취소
                             </button>
                             <button
-                                onClick={handleSendFiles}
+                                onClick={handleSendFile}
                                 disabled={isSending}
                                 className="px-4 py-2 bg-primary text-white rounded-md hover:bg-blue-600 disabled:opacity-50"
                             >
@@ -579,7 +488,6 @@ const App = () => {
                                 {selectedUser.nickname.charAt(0).toUpperCase()}
                             </div>
                             <h3 className="text-xl font-semibold">{selectedUser.nickname}</h3>
-                            <p className="text-gray-600 mt-2">ID: {selectedUser.id}</p>
                         </div>
                         <div className="flex justify-center gap-3">
                             <button
@@ -596,29 +504,6 @@ const App = () => {
                                 className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
                             >
                                 닫기
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* WiFi Alert Modal */}
-            {showWifiAlert && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-30">
-                    <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl text-center">
-                        <div className="w-16 h-16 mx-auto bg-yellow-500 rounded-full flex items-center justify-center text-white text-xl font-bold mb-3">
-                            <i className="fas fa-wifi"></i>
-                        </div>
-                        <h3 className="text-lg font-semibold">네트워크 연결 오류</h3>
-                        <p className="text-gray-600 mt-2">
-                            같은 wifi에 연결되어 있지 않아요. 같은 wifi에 접속해주세요.
-                        </p>
-                        <div className="flex justify-center mt-6">
-                            <button
-                                onClick={closeWifiAlert}
-                                className="px-5 py-2 bg-primary text-white rounded-md hover:bg-blue-600"
-                            >
-                                확인
                             </button>
                         </div>
                     </div>
