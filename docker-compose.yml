@@ -1,0 +1,12 @@
+services:
+  backend:
+    build: ./server/netdrops
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  frontend:
+    build: ./client/netdrops-frontend
+    ports:
+      - "3000:80"
+    restart: unless-stopped

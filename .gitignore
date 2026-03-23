@@ -1,0 +1,49 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# IDE - IntelliJ IDEA
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# IDE - VS Code
+.vscode/
+
+# IDE - Eclipse / STS
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Build output
+build/
+dist/
+
+# Java
+*.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+.gradle/
+
+# Cache
+.cache/
+.eslintcache
+
+# Logs
+*.log
+logs/
