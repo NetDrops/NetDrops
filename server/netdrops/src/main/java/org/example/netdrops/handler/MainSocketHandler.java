@@ -149,7 +149,9 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
         if (targetId != null) {
             UserSession target = sessions.get(targetId);
             if (target != null && target.getSession().isOpen()) {
-                sendSafe(target.getSession(), message);
+                byte[] data = new byte[message.getPayloadLength()];
+                message.getPayload().get(data);
+                sendSafe(target.getSession(), new BinaryMessage(data));
             } else {
                 fileTransferMap.remove(senderId);
             }
