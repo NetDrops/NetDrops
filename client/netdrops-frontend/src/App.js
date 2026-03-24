@@ -278,9 +278,9 @@ const App = () => {
 
                 <section className="bg-white/60 backdrop-blur rounded-2xl p-6 sm:p-8 shadow-sm text-center mb-8 max-w-lg w-full">
                     <p className="text-gray-500 text-sm sm:text-base leading-relaxed">
-                        쉽고 빠르게 파일을 전송할 수 있는 서비스입니다.
+                        디바이스 제약 없이 쉽고 빠르게 파일을 전송할 수 있는 서비스입니다.
                         <br className="hidden sm:block" />
-                        같은 네트워크의 사용자와 간편하게 공유하세요.
+                        언제 어디서나 간편하게 파일을 공유하세요.
                     </p>
                 </section>
 
