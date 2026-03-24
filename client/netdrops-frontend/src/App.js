@@ -174,10 +174,32 @@ const App = () => {
         if (!accepted) setSelectedUser(null);
     };
 
-    // receivedFile에 blobUrl을 미리 생성해서 저장
-    const receivedFileUrl = receivedFile
-        ? URL.createObjectURL(receivedFile.blob)
-        : null;
+    const handleSaveFile = async () => {
+        if (!receivedFile) return;
+
+        // 모바일 공유 API 지원 시 (iOS/Android)
+        if (navigator.share && navigator.canShare) {
+            try {
+                const file = new File([receivedFile.blob], receivedFile.name, { type: receivedFile.blob.type });
+                if (navigator.canShare({ files: [file] })) {
+                    await navigator.share({ files: [file] });
+                    return;
+                }
+            } catch (e) {
+                if (e.name === "AbortError") return;
+            }
+        }
+
+        // 데스크탑 fallback
+        const url = URL.createObjectURL(receivedFile.blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = receivedFile.name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+    };
 
     return (
         <div className="min-h-screen bg-transparent flex flex-col">
@@ -305,25 +327,21 @@ const App = () => {
             </div>
 
             {/* 수신된 파일 (하단 고정) */}
-            {receivedFile && receivedFileUrl && (
+            {receivedFile && (
                 <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-lg p-4 z-20">
                     <div className="max-w-xl mx-auto">
                         <div className="flex justify-between items-center">
                             <span className="text-sm truncate flex-1 mr-4">{receivedFile.name}</span>
                             <div className="flex gap-2">
-                                <a
-                                    href={receivedFileUrl}
-                                    download={receivedFile.name}
-                                    className="px-3 py-1 bg-blue-500 text-white text-sm rounded hover:bg-blue-600 inline-block"
+                                <button
+                                    className="px-3 py-1 bg-blue-500 text-white text-sm rounded hover:bg-blue-600"
+                                    onClick={handleSaveFile}
                                 >
                                     저장하기
-                                </a>
+                                </button>
                                 <button
                                     className="px-3 py-1 text-gray-400 text-sm hover:text-gray-600"
-                                    onClick={() => {
-                                        URL.revokeObjectURL(receivedFileUrl);
-                                        setReceivedFile(null);
-                                    }}
+                                    onClick={() => setReceivedFile(null)}
                                 >
                                     닫기
                                 </button>
