@@ -43,6 +43,9 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
+        session.setBinaryMessageSizeLimit(100 * 1024 * 1024);
+        session.setTextMessageSizeLimit(64 * 1024);
+
         String nickname = NicknameGenerator.generate();
         sessions.put(session.getId(), new UserSession(session.getId(), nickname, session));
         logger.info("Connected: sessionId={}, nickname={}", session.getId(), nickname);
