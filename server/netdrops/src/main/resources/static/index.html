@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Netdrops</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        #status { margin-bottom: 10px; }
+        #messages { border: 1px solid #ccc; padding: 10px; height: 150px; overflow-y: scroll; margin-bottom: 10px; }
+        #userList { border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; }
+        .user-item { padding: 5px; cursor: pointer; border-bottom: 1px solid #eee; }
+        .user-item:hover { background-color: #f0f0f0; }
+        .request-box { border: 1px solid #aaa; padding: 10px; margin: 10px 0; }
+        .request-box button { margin-right: 10px; }
+        #receivedFiles { border: 1px solid #ccc; padding: 10px; margin-top: 10px; display: none; }
+        .received-file { display: flex; justify-content: space-between; align-items: center; padding: 8px; border-bottom: 1px solid #eee; }
+        #progress { margin: 8px 0; color: #555; }
+    </style>
+</head>
+<body>
+<h1>Netdrops</h1>
+<p id="status">연결 대기중...</p>
+<div id="messages"></div>
+
+<h3>현재 접속자 목록</h3>
+<div id="userList">연결된 사용자가 없습니다.</div>
+
+<div id="requestContainer"></div>
+
+<input type="file" id="fileInput" multiple style="display: none;">
+<button id="sendButton" style="display: none;">파일 전송</button>
+<p id="progress"></p>
+
+<div id="receivedFiles">
+    <h3>수신된 파일</h3>
+    <div id="receivedFileList"></div>
+</div>
+
+<script>
+    const BLOCKED_EXTENSIONS = ['exe','bat','cmd','sh','ps1','msi','dmg','apk','vbs','jar','com','scr'];
+
+    let ws;
+    let mySessionId = null;
+    let myNickname = null;
+    let targetForFileTransfer = null;
+    let pendingMeta = null; // 다음 binary 메시지와 매핑될 meta 정보
+
+    const statusEl = document.getElementById('status');
+    const messagesEl = document.getElementById('messages');
+    const userListEl = document.getElementById('userList');
+    const requestContainer = document.getElementById('requestContainer');
+    const fileInput = document.getElementById('fileInput');
+    const sendButton = document.getElementById('sendButton');
+    const progressEl = document.getElementById('progress');
+    const receivedFilesEl = document.getElementById('receivedFiles');
+    const receivedFileListEl = document.getElementById('receivedFileList');
+
+    function appendMessage(msg) {
+        const p = document.createElement('p');
+        p.textContent = msg;
+        messagesEl.appendChild(p);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function generateId() {
+        return Math.random().toString(36).substr(2, 9);
+    }
+
+    function createRequestUI(senderNickname, senderSessionId) {
+        const requestBox = document.createElement('div');
+        requestBox.className = 'request-box';
+        requestBox.textContent = `${senderNickname}님이 파일 전송 요청을 보냈습니다.`;
+
+        const acceptButton = document.createElement('button');
+        acceptButton.textContent = "수락";
+        acceptButton.onclick = function () {
+            ws.send(JSON.stringify({
+                type: "response",
+                target: senderSessionId,
+                from: mySessionId,
+                data: { accepted: true }
+            }));
+            appendMessage("전송 요청을 수락하였습니다.");
+            requestContainer.removeChild(requestBox);
+        };
+
+        const declineButton = document.createElement('button');
+        declineButton.textContent = "거절";
+        declineButton.onclick = function () {
+            ws.send(JSON.stringify({
+                type: "response",
+                target: senderSessionId,
+                from: mySessionId,
+                data: { accepted: false }
+            }));
+            appendMessage("전송 요청을 거절하였습니다.");
+            requestContainer.removeChild(requestBox);
+        };
+
+        requestBox.appendChild(acceptButton);
+        requestBox.appendChild(declineButton);
+        requestContainer.appendChild(requestBox);
+    }
+
+    function updateUserList(users) {
+        userListEl.innerHTML = "";
+        if (users.length === 0) {
+            userListEl.textContent = "연결된 사용자가 없습니다.";
+            return;
+        }
+        users.forEach(user => {
+            if (user.sessionId === mySessionId) return;
+            const div = document.createElement('div');
+            div.className = 'user-item';
+            div.textContent = user.nickname;
+            div.onclick = () => {
+                ws.send(JSON.stringify({
+                    type: "request",
+                    target: user.sessionId,
+                    senderSessionId: mySessionId,
+                    senderNickname: myNickname
+                }));
+                appendMessage(`${user.nickname}님에게 전송 요청을 보냈습니다.`);
+            };
+            userListEl.appendChild(div);
+        });
+    }
+
+    // 수신 완료된 파일을 목록에 추가 (사용자가 직접 탭해서 저장 → iOS 호환)
+    function addReceivedFile(filename, blob) {
+        receivedFilesEl.style.display = 'block';
+        const div = document.createElement('div');
+        div.className = 'received-file';
+
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = filename;
+
+        const saveBtn = document.createElement('button');
+        saveBtn.textContent = '저장하기';
+        saveBtn.onclick = () => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        };
+
+        div.appendChild(nameSpan);
+        div.appendChild(saveBtn);
+        receivedFileListEl.appendChild(div);
+        appendMessage(`파일 수신 완료: ${filename}`);
+    }
+
+    // 파일을 한 개씩 순차적으로 전송 (meta → binary → complete 순서 보장)
+    async function sendFilesSequentially(files) {
+        sendButton.disabled = true;
+        fileInput.disabled = true;
+
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            const fileId = generateId();
+            progressEl.textContent = `전송 중 (${i + 1}/${files.length}): ${file.name}`;
+
+            // 1. meta 전송
+            ws.send(JSON.stringify({
+                type: "meta",
+                target: targetForFileTransfer,
+                fileId: fileId,
+                filename: file.name,
+                fileSize: file.size,
+                mimeType: file.type
+            }));
+
+            // 2. binary 전송 (await로 읽기 완료 후 즉시 전송 → meta 다음 순서 보장)
+            const arrayBuffer = await file.arrayBuffer();
+            ws.send(arrayBuffer);
+
+            // 3. 파일 단위 complete 전송
+            ws.send(JSON.stringify({
+                type: "complete",
+                target: targetForFileTransfer,
+                fileId: fileId
+            }));
+
+            appendMessage(`파일 전송됨: ${file.name}`);
+        }
+
+        // 4. 모든 파일 전송 완료 신호
+        ws.send(JSON.stringify({
+            type: "allComplete",
+            target: targetForFileTransfer
+        }));
+
+        progressEl.textContent = `전송 완료 (${files.length}개)`;
+        fileInput.value = "";
+        fileInput.style.display = "none";
+        sendButton.style.display = "none";
+        sendButton.disabled = false;
+        fileInput.disabled = false;
+        targetForFileTransfer = null;
+    }
+
+    function connectWebSocket() {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+
+        ws.onopen = () => {
+            statusEl.textContent = "서버에 연결되었습니다.";
+            appendMessage("서버에 연결되었습니다.");
+        };
+
+        ws.onmessage = (event) => {
+            if (typeof event.data === 'string') {
+                try {
+                    const data = JSON.parse(event.data);
+
+                    if (data.type === "init") {
+                        mySessionId = data.sessionId;
+                        myNickname = data.nickname;
+                        appendMessage(`내 닉네임: ${myNickname}`);
+
+                    } else if (data.type === "userList") {
+                        updateUserList(data.users);
+
+                    } else if (data.type === "request") {
+                        createRequestUI(data.senderNickname || "알 수 없음", data.senderSessionId || "");
+
+                    } else if (data.type === "response") {
+                        if (data.data.accepted) {
+                            appendMessage("상대방이 수락하였습니다. 파일을 선택해주세요.");
+                            fileInput.style.display = "inline";
+                            sendButton.style.display = "inline";
+                            targetForFileTransfer = data.from; // 수락한 상대방의 sessionId
+                        } else {
+                            appendMessage("상대방이 거절하였습니다.");
+                        }
+
+                    } else if (data.type === "meta") {
+                        // 다음으로 수신될 binary와 매핑할 파일 정보 저장
+                        pendingMeta = { fileId: data.fileId, filename: data.filename };
+
+                    } else if (data.type === "allComplete") {
+                        appendMessage("모든 파일 수신이 완료되었습니다.");
+                    }
+
+                } catch (err) {
+                    appendMessage("서버: " + event.data);
+                }
+            } else {
+                // binary 수신: 직전 meta와 매핑
+                if (pendingMeta) {
+                    const blob = event.data instanceof Blob ? event.data : new Blob([event.data]);
+                    addReceivedFile(pendingMeta.filename, blob);
+                    pendingMeta = null;
+                }
+            }
+        };
+
+        ws.onerror = () => {
+            appendMessage("WebSocket 에러 발생");
+        };
+
+        ws.onclose = () => {
+            statusEl.textContent = "연결이 종료되었습니다.";
+            appendMessage("연결이 종료되었습니다.");
+        };
+    }
+
+    connectWebSocket();
+
+    sendButton.addEventListener("click", () => {
+        const files = Array.from(fileInput.files);
+        if (files.length === 0) {
+            alert("전송할 파일을 선택해주세요.");
+            return;
+        }
+
+        // 블랙리스트 검증
+        for (const file of files) {
+            const ext = file.name.split('.').pop().toLowerCase();
+            if (BLOCKED_EXTENSIONS.includes(ext)) {
+                alert(`${file.name}: 실행 파일은 전송할 수 없습니다.`);
+                return;
+            }
+        }
+
+        if (ws.readyState !== WebSocket.OPEN) {
+            alert("서버 연결이 끊어져 있습니다.");
+            return;
+        }
+
+        sendFilesSequentially(files);
+    });
+</script>
+</body>
+</html>
