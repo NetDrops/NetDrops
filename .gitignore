@@ -32,6 +32,7 @@ node_modules/
 
 # Build output
 dist/
+build/
 
 # Java
 *.class
