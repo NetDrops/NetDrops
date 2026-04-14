@@ -3,9 +3,12 @@ package org.example.netdrops.handler;
 import org.example.netdrops.model.UserSession;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.example.netdrops.util.NicknameGenerator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
 import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -18,6 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.List;
 import java.util.stream.Collectors;
 
+@Component
 public class MainSocketHandler extends BinaryWebSocketHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(MainSocketHandler.class);
@@ -27,6 +31,19 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
     private final Map<String, String> fileTransferMap = new ConcurrentHashMap<>();
     private final Map<String, Object> sessionLocks = new ConcurrentHashMap<>();
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    private final Counter sessionsOpened;
+    private final Counter sessionsClosed;
+
+    public MainSocketHandler(MeterRegistry registry) {
+        registry.gauge("netdrops.ws.sessions.active", sessions, Map::size);
+        this.sessionsOpened = Counter.builder("netdrops.ws.sessions.opened")
+                .description("Total WebSocket sessions opened")
+                .register(registry);
+        this.sessionsClosed = Counter.builder("netdrops.ws.sessions.closed")
+                .description("Total WebSocket sessions closed")
+                .register(registry);
+    }
 
     private void sendSafe(WebSocketSession session, WebSocketMessage<?> message) {
         Object lock = sessionLocks.computeIfAbsent(session.getId(), k -> new Object());
@@ -48,6 +65,7 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
 
         String nickname = NicknameGenerator.generate();
         sessions.put(session.getId(), new UserSession(session.getId(), nickname, session));
+        sessionsOpened.increment();
         logger.info("Connected: sessionId={}, nickname={}", session.getId(), nickname);
 
         try {
@@ -161,6 +179,7 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         logger.info("Disconnected: sessionId={}, status={}", session.getId(), status);
+        sessionsClosed.increment();
         sessions.remove(session.getId());
         fileTransferMap.remove(session.getId());
         sessionLocks.remove(session.getId());

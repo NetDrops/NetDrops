@@ -52,3 +52,5 @@ application-prod.properties
 
 # HELP.md (Spring Initializr 자동 생성)
 HELP.md
+
+/docs

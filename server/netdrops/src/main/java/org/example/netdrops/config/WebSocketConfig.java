@@ -11,9 +11,16 @@ import org.springframework.web.socket.server.standard.ServletServerContainerFact
 @Configuration
 @EnableWebSocket
 public class WebSocketConfig implements WebSocketConfigurer {
+
+    private final MainSocketHandler mainSocketHandler;
+
+    public WebSocketConfig(MainSocketHandler mainSocketHandler) {
+        this.mainSocketHandler = mainSocketHandler;
+    }
+
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
-        registry.addHandler(new MainSocketHandler(), "/ws")
+        registry.addHandler(mainSocketHandler, "/ws")
                 .setAllowedOrigins("*");
     }
 
