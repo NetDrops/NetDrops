@@ -2,6 +2,11 @@ spring:
   application:
     name: netdrops
 
+logging:
+  level:
+    root: WARN
+    org.example.netdrops: WARN
+
 server:
   tomcat:
     threads:
