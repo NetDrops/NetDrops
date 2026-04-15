@@ -35,7 +35,6 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
 
     private final Map<String, UserSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, String> fileTransferMap = new ConcurrentHashMap<>();
-    private final Map<String, Object> sessionLocks = new ConcurrentHashMap<>();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private final ScheduledExecutorService broadcastScheduler =
@@ -100,19 +99,14 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
 
     private void sendSafe(WebSocketSession session, WebSocketMessage<?> message) {
         String sid = session.getId();
-        Object lock = sessionLocks.get(sid);
-        if (lock == null) return;
-        synchronized (lock) {
-            if (!session.isOpen()) return;
-            try {
-                session.sendMessage(message);
-            } catch (Exception e) {
-                countError("send");
-                sessions.remove(sid);
-                fileTransferMap.remove(sid);
-                sessionLocks.remove(sid);
-                logger.warn("send failed, session evicted: {} ({})", sid, e.getMessage());
-            }
+        if (!session.isOpen()) return;
+        try {
+            session.sendMessage(message);
+        } catch (Exception e) {
+            countError("send");
+            sessions.remove(sid);
+            fileTransferMap.remove(sid);
+            logger.warn("send failed, session evicted: {} ({})", sid, e.getMessage());
         }
     }
 
@@ -124,7 +118,6 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
         String nickname = NicknameGenerator.generate();
         WebSocketSession concurrent = new ConcurrentWebSocketSessionDecorator(
                 session, SEND_TIME_LIMIT_MS, SEND_BUFFER_LIMIT);
-        sessionLocks.put(session.getId(), new Object());
         sessions.put(session.getId(), new UserSession(session.getId(), nickname, concurrent));
         sessionsOpened.increment();
         logger.info("Connected: sessionId={}, nickname={}", session.getId(), nickname);
@@ -280,7 +273,6 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
         sessionsClosed.increment();
         sessions.remove(session.getId());
         fileTransferMap.remove(session.getId());
-        sessionLocks.remove(session.getId());
         broadcastUserList();
     }
 }
