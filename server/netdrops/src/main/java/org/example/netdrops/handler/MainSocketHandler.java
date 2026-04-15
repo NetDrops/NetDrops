@@ -125,7 +125,10 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
                     .collect(Collectors.toList());
             String json = objectMapper.writeValueAsString(Map.of("type", "userList", "users", userList));
             TextMessage msg = new TextMessage(json);
-            sessions.values().forEach(user -> sendSafe(user.getSession(), msg));
+            sessions.values().forEach(user -> {
+                sendSafe(user.getSession(), msg);
+                countMessage("out", "userList");
+            });
         } catch (Exception e) {
             countError("handle");
             logger.error("Error broadcasting user list: {}", e.getMessage(), e);
