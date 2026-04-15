@@ -55,6 +55,8 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
     private final Counter transferBytes;
     private final DistributionSummary transferSize;
     private final Counter oversizeRejected;
+    private final Map<String, Counter> messageCounters = new ConcurrentHashMap<>();
+    private final Map<String, Counter> errorCounters = new ConcurrentHashMap<>();
 
     public MainSocketHandler(MeterRegistry registry) {
         this.registry = registry;
@@ -83,18 +85,21 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
     }
 
     private void countMessage(String direction, String type) {
-        Counter.builder("netdrops.ws.messages")
-                .tag("direction", direction)
-                .tag("type", type)
-                .register(registry)
-                .increment();
+        String key = direction + ":" + type;
+        messageCounters.computeIfAbsent(key, k ->
+                Counter.builder("netdrops.ws.messages")
+                        .tag("direction", direction)
+                        .tag("type", type)
+                        .register(registry)
+        ).increment();
     }
 
     private void countError(String stage) {
-        Counter.builder("netdrops.ws.errors")
-                .tag("stage", stage)
-                .register(registry)
-                .increment();
+        errorCounters.computeIfAbsent(stage, k ->
+                Counter.builder("netdrops.ws.errors")
+                        .tag("stage", stage)
+                        .register(registry)
+        ).increment();
     }
 
     private void sendSafe(WebSocketSession session, WebSocketMessage<?> message) {
