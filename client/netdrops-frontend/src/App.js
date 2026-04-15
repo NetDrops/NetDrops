@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { Github, HelpCircle, FileText, Download, Users } from "lucide-react";
 
 const BLOCKED_EXTENSIONS = ['exe','bat','cmd','sh','ps1','msi','dmg','apk','vbs','jar','com','scr'];
-const CHUNK_SIZE = 256 * 1024; // 256KB (서버 제한 512KB 이내)
+const CHUNK_SIZE = 512 * 1024; // 512KB (서버 제한과 동일)
 
 const App = () => {
     const [currentUser, setCurrentUser] = useState(null);
