@@ -19,6 +19,10 @@ import org.springframework.web.socket.handler.BinaryWebSocketHandler;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -32,6 +36,15 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
     private final Map<String, String> fileTransferMap = new ConcurrentHashMap<>();
     private final Map<String, Object> sessionLocks = new ConcurrentHashMap<>();
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    private final ScheduledExecutorService broadcastScheduler =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "ws-broadcast");
+                t.setDaemon(true);
+                return t;
+            });
+    private final AtomicBoolean broadcastPending = new AtomicBoolean(false);
+    private static final long BROADCAST_THROTTLE_MS = 200;
 
     private final MeterRegistry registry;
     private final Counter sessionsOpened;
@@ -82,15 +95,19 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
     }
 
     private void sendSafe(WebSocketSession session, WebSocketMessage<?> message) {
-        Object lock = sessionLocks.computeIfAbsent(session.getId(), k -> new Object());
+        String sid = session.getId();
+        Object lock = sessionLocks.get(sid);
+        if (lock == null) return;
         synchronized (lock) {
+            if (!session.isOpen()) return;
             try {
-                if (session.isOpen()) {
-                    session.sendMessage(message);
-                }
+                session.sendMessage(message);
             } catch (Exception e) {
                 countError("send");
-                logger.error("Error sending to {}: {}", session.getId(), e.getMessage(), e);
+                sessions.remove(sid);
+                fileTransferMap.remove(sid);
+                sessionLocks.remove(sid);
+                logger.warn("send failed, session evicted: {} ({})", sid, e.getMessage());
             }
         }
     }
@@ -101,6 +118,7 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
         session.setTextMessageSizeLimit(16 * 1024);          // 16KB
 
         String nickname = NicknameGenerator.generate();
+        sessionLocks.put(session.getId(), new Object());
         sessions.put(session.getId(), new UserSession(session.getId(), nickname, session));
         sessionsOpened.increment();
         logger.info("Connected: sessionId={}, nickname={}", session.getId(), nickname);
@@ -119,6 +137,15 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
     }
 
     private void broadcastUserList() {
+        if (broadcastPending.compareAndSet(false, true)) {
+            broadcastScheduler.schedule(() -> {
+                broadcastPending.set(false);
+                doBroadcastUserList();
+            }, BROADCAST_THROTTLE_MS, TimeUnit.MILLISECONDS);
+        }
+    }
+
+    private void doBroadcastUserList() {
         try {
             List<Map<String, String>> userList = sessions.values().stream()
                     .map(u -> Map.of("sessionId", u.getSessionId(), "nickname", u.getNickname()))
