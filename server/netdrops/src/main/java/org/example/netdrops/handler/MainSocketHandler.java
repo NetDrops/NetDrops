@@ -47,8 +47,8 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
     private final AtomicBoolean broadcastPending = new AtomicBoolean(false);
     private static final long BROADCAST_THROTTLE_MS = 200;
 
-    private static final int SEND_TIME_LIMIT_MS = 5_000;
-    private static final int SEND_BUFFER_LIMIT = 512 * 1024;
+    private static final int SEND_TIME_LIMIT_MS = 20_000;
+    private static final int SEND_BUFFER_LIMIT = 5 * 1024 * 1024;
 
     private final MeterRegistry registry;
     private final Counter sessionsOpened;
