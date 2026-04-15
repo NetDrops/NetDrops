@@ -2,6 +2,14 @@ spring:
   application:
     name: netdrops
 
+server:
+  tomcat:
+    threads:
+      max: 800
+      min-spare: 50
+    max-connections: 20000
+    accept-count: 500
+
 management:
   endpoints:
     web:
