@@ -16,6 +16,7 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.BinaryWebSocketHandler;
+import org.springframework.web.socket.handler.ConcurrentWebSocketSessionDecorator;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -45,6 +46,9 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
             });
     private final AtomicBoolean broadcastPending = new AtomicBoolean(false);
     private static final long BROADCAST_THROTTLE_MS = 200;
+
+    private static final int SEND_TIME_LIMIT_MS = 5_000;
+    private static final int SEND_BUFFER_LIMIT = 512 * 1024;
 
     private final MeterRegistry registry;
     private final Counter sessionsOpened;
@@ -118,8 +122,10 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
         session.setTextMessageSizeLimit(16 * 1024);          // 16KB
 
         String nickname = NicknameGenerator.generate();
+        WebSocketSession concurrent = new ConcurrentWebSocketSessionDecorator(
+                session, SEND_TIME_LIMIT_MS, SEND_BUFFER_LIMIT);
         sessionLocks.put(session.getId(), new Object());
-        sessions.put(session.getId(), new UserSession(session.getId(), nickname, session));
+        sessions.put(session.getId(), new UserSession(session.getId(), nickname, concurrent));
         sessionsOpened.increment();
         logger.info("Connected: sessionId={}, nickname={}", session.getId(), nickname);
 
@@ -127,7 +133,7 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
             String initMsg = objectMapper.writeValueAsString(
                     Map.of("type", "init", "sessionId", session.getId(), "nickname", nickname)
             );
-            sendSafe(session, new TextMessage(initMsg));
+            sendSafe(concurrent, new TextMessage(initMsg));
         } catch (Exception e) {
             countError("handle");
             logger.error("Error creating init message: {}", e.getMessage(), e);
@@ -244,7 +250,10 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
 
         if (payloadLength > MAX_BINARY_SIZE) {
             oversizeRejected.increment();
-            sendSafe(session, new TextMessage("파일 크기가 100MB를 초과하였습니다."));
+            UserSession self = sessions.get(senderId);
+            if (self != null) {
+                sendSafe(self.getSession(), new TextMessage("파일 크기가 100MB를 초과하였습니다."));
+            }
             return;
         }
 
