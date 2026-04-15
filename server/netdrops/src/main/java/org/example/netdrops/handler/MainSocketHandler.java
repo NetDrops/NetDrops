@@ -26,7 +26,7 @@ import java.util.stream.Collectors;
 public class MainSocketHandler extends BinaryWebSocketHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(MainSocketHandler.class);
-    private static final long MAX_BINARY_SIZE = 100L * 1024 * 1024; // 100MB
+    private static final long MAX_BINARY_SIZE = 512L * 1024; // 512KB per chunk
 
     private final Map<String, UserSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, String> fileTransferMap = new ConcurrentHashMap<>();
@@ -97,8 +97,8 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
-        session.setBinaryMessageSizeLimit(100 * 1024 * 1024);
-        session.setTextMessageSizeLimit(64 * 1024);
+        session.setBinaryMessageSizeLimit(512 * 1024);  // 512KB
+        session.setTextMessageSizeLimit(16 * 1024);          // 16KB
 
         String nickname = NicknameGenerator.generate();
         sessions.put(session.getId(), new UserSession(session.getId(), nickname, session));
