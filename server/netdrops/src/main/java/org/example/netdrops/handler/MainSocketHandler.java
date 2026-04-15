@@ -47,7 +47,7 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
     private static final long BROADCAST_THROTTLE_MS = 200;
 
     private static final int SEND_TIME_LIMIT_MS = 20_000;
-    private static final int SEND_BUFFER_LIMIT = 5 * 1024 * 1024;
+    private static final int SEND_BUFFER_LIMIT = 10 * 1024 * 1024;
 
     private final MeterRegistry registry;
     private final Counter sessionsOpened;
@@ -181,6 +181,7 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
             switch (type) {
                 case "request": {
                     countMessage("in", "request");
+                    if (!json.hasNonNull("target")) break;
                     String targetId = json.get("target").asText();
                     UserSession target = sessions.get(targetId);
                     if (target != null && target.getSession().isOpen()) {
@@ -191,7 +192,8 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
                 }
                 case "response": {
                     countMessage("in", "response");
-                    boolean accepted = json.get("data").get("accepted").asBoolean();
+                    if (!json.hasNonNull("target") || !json.hasNonNull("data")) break;
+                    boolean accepted = json.get("data").path("accepted").asBoolean(false);
                     String senderId = json.get("target").asText();
                     UserSession sender = sessions.get(senderId);
                     if (sender != null && sender.getSession().isOpen()) {
@@ -206,6 +208,7 @@ public class MainSocketHandler extends BinaryWebSocketHandler {
                 }
                 case "meta": {
                     countMessage("in", "meta");
+                    if (!json.hasNonNull("target")) break;
                     String targetId = json.get("target").asText();
                     UserSession target = sessions.get(targetId);
                     if (target != null && target.getSession().isOpen()) {
