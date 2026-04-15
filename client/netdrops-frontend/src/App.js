@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { Github, HelpCircle, FileText, Download, Users } from "lucide-react";
 
 const BLOCKED_EXTENSIONS = ['exe','bat','cmd','sh','ps1','msi','dmg','apk','vbs','jar','com','scr'];
+const CHUNK_SIZE = 256 * 1024; // 256KB (서버 제한 512KB 이내)
 
 const App = () => {
     const [currentUser, setCurrentUser] = useState(null);
@@ -88,11 +89,19 @@ const App = () => {
                             pendingMeta.current = {
                                 fileName: data.fileName,
                                 fileType: data.fileType,
+                                chunks: [],
                             };
                             break;
-                        case "complete":
+                        case "complete": {
+                            const meta = pendingMeta.current;
+                            if (meta && meta.chunks.length > 0) {
+                                const blob = new Blob(meta.chunks, { type: meta.fileType });
+                                setReceivedFile({ name: meta.fileName, blob });
+                            }
+                            pendingMeta.current = null;
                             console.log("파일 수신 완료");
                             break;
+                        }
                         default:
                             break;
                     }
@@ -100,14 +109,10 @@ const App = () => {
                     console.error("파싱 오류:", err);
                 }
             } else {
-                const buffer = event.data;
                 const meta = pendingMeta.current;
-                const fileName = meta?.fileName || "Netdrops_download";
-                const fileType = meta?.fileType || "application/octet-stream";
-                pendingMeta.current = null;
-
-                const blob = new Blob([buffer], { type: fileType });
-                setReceivedFile({ name: fileName, blob });
+                if (meta) {
+                    meta.chunks.push(event.data);
+                }
             }
         };
 
@@ -139,9 +144,18 @@ const App = () => {
             target: targetSessionId,
         }));
 
-        // 2. binary
-        const arrayBuffer = await selectedFile.arrayBuffer();
-        ws.current.send(arrayBuffer);
+        // 2. binary chunks (backpressure 고려)
+        const totalSize = selectedFile.size;
+        for (let offset = 0; offset < totalSize; offset += CHUNK_SIZE) {
+            const slice = selectedFile.slice(offset, Math.min(offset + CHUNK_SIZE, totalSize));
+            const buf = await slice.arrayBuffer();
+
+            // 버퍼 적체 시 대기 (1MB 이상이면 잠깐 yield)
+            while (ws.current.bufferedAmount > 1024 * 1024) {
+                await new Promise((r) => setTimeout(r, 20));
+            }
+            ws.current.send(buf);
+        }
 
         // 3. complete
         ws.current.send(JSON.stringify({
